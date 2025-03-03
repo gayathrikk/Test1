@@ -1,0 +1,9 @@
+Machine: pp2
+Error checking machine: pp2 - java.net.UnknownHostException: pp2
+
+Machine: pp3
+Error checking machine: pp3 - java.net.UnknownHostException: pp3
+
+Machine: qd4
+Error checking machine: qd4 - java.net.UnknownHostException: qd4
+
