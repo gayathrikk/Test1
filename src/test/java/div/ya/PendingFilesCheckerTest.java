@@ -1,27 +1,24 @@
 package div.ya;
 
 import com.jcraft.jsch.*;
-
-import java.io.BufferedReader; 
-import java.io.InputStreamReader;
-import java.util.HashMap;
-import java.util.Map;
- 
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Date;
- 
-import java.util.List;
- 
-
 import org.testng.Assert;
 import org.testng.annotations.Test;
+import javax.mail.*;
+import javax.mail.Session;
+import javax.mail.internet.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
 
 public class PendingFilesCheckerTest {
-	private static final int PORT = 22;
+    private static final int PORT = 22;
     private static final String USER = "appUser";
     private static final String PASSWORD = "Brain@123";
+
+    private static final String SMTP_HOST = "smtp.gmail.com";
+    private static final String FROM_EMAIL = "softwaretestingteam9@gmail.com";
+    private static final String FROM_PASSWORD = "Health#123";
+    private static final String TO_EMAIL = "annotatin.divya@gmail.com";
 
     private static final Map<String, String> MACHINES = new HashMap<>();
 
@@ -36,7 +33,7 @@ public class PendingFilesCheckerTest {
     }
 
     private String getCurrentDate() {
-        return new SimpleDateFormat("MMM dd").format(new Date()); // Example: Mar 01
+        return new SimpleDateFormat("MMM dd").format(new Date());
     }
 
     private Map<String, List<String>> getFiles(String host, String directory) {
@@ -49,7 +46,10 @@ public class PendingFilesCheckerTest {
             com.jcraft.jsch.Session sshSession = jsch.getSession(USER, host, PORT);
             sshSession.setPassword(PASSWORD);
             sshSession.setConfig("StrictHostKeyChecking", "no");
+
+            System.out.println("🔄 Connecting to " + host + "...");
             sshSession.connect();
+            System.out.println("✅ Connected to " + host);
 
             ChannelExec channelExec = (ChannelExec) sshSession.openChannel("exec");
             channelExec.setCommand("ls -lh --time-style='+%b %d %H:%M' " + directory);
@@ -74,6 +74,7 @@ public class PendingFilesCheckerTest {
             channelExec.disconnect();
             sshSession.disconnect();
         } catch (Exception e) {
+            System.err.println("❌ Error connecting to " + host + ": " + e.getMessage());
             e.printStackTrace();
         }
 
@@ -84,6 +85,14 @@ public class PendingFilesCheckerTest {
 
     @Test
     public void testFiles() {
+        StringBuilder emailContent = new StringBuilder();
+        boolean pendingFilesFound = false;
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        PrintStream originalOut = System.out;
+        PrintStream newOut = new PrintStream(outputStream);
+        System.setOut(newOut);
+
         for (Map.Entry<String, String> entry : MACHINES.entrySet()) {
             String host = entry.getKey();
             String directory = entry.getValue();
@@ -95,45 +104,70 @@ public class PendingFilesCheckerTest {
             System.out.println("\n================================== " + host + " ==================================");
 
             if (!currentFiles.isEmpty()) {
-                System.out.println("Current Files:");
-                System.out.println("---------------------------------------------------------------------------------------");
-                System.out.println("Permissions    Size     Date       Time              Filename");
-                System.out.println("---------------------------------------------------------------------------------------");
+                System.out.println("📂 Current Files:");
+                System.out.println("--------------------------------------------------------------");
                 for (String file : currentFiles) {
-                    printFormattedFile(file);
+                    System.out.println(file);
                 }
             } else {
-                System.out.println("No new files added today on " + host);
+                System.out.println("✅ No new files added today on " + host);
             }
 
             System.out.println();
 
             if (!pendingFiles.isEmpty()) {
-                System.out.println("Pending Files:");
-                System.out.println("Permissions    Size     Date       Time              Filename");
-                System.out.println("---------------------------------------------------------------------------------------");
+                pendingFilesFound = true;
+                System.out.println("⏳ Pending Files:");
+                System.out.println("--------------------------------------------------------------");
                 for (String file : pendingFiles) {
-                    printFormattedFile(file);
+                    System.out.println(file);
                 }
             } else {
-                System.out.println("No pending files remaining on " + host);
-                System.out.println("================================== ***DONE**** ==================================");
+                System.out.println("🎉 No pending files remaining on " + host);
+                System.out.println("================================== ***DONE*** ==================================");
             }
 
-            Assert.assertNotNull(files, "Failed to fetch files from " + host);
+            Assert.assertNotNull(files, "⚠️ Failed to fetch files from " + host);
         }
+
+        System.out.flush();
+        System.setOut(originalOut);
+
+        String consoleOutput = outputStream.toString().trim();
+        System.out.println("Captured Output:\n" + consoleOutput);
+
+        if (consoleOutput.isEmpty()) {
+            consoleOutput = "✅ No pending files found across all servers.";
+        }
+
+        sendEmail("Pending Files Report", consoleOutput);
     }
 
-    private void printFormattedFile(String file) {
-        String[] parts = file.split("\\s+");
-        if (parts.length >= 9) {
-            String permissions = parts[0];
-            String size = parts[4];
-            String date = parts[5] + " " + parts[6];
-            String time = parts[7];
-            String filename = String.join(" ", Arrays.copyOfRange(parts, 8, parts.length));
+    private void sendEmail(String subject, String body) {
+        Properties properties = new Properties();
+        properties.put("mail.smtp.auth", "true");
+        properties.put("mail.smtp.starttls.enable", "true");
+        properties.put("mail.smtp.host", SMTP_HOST);
+        properties.put("mail.smtp.port", "587");
 
-            System.out.printf("%-14s %-8s %-10s %-6s %s%n", permissions, size, date, time, filename);
+        Session session = Session.getInstance(properties, new Authenticator() {
+            protected PasswordAuthentication getPasswordAuthentication() {
+                return new PasswordAuthentication(FROM_EMAIL, FROM_PASSWORD);
+            }
+        });
+
+        try {
+            Message message = new MimeMessage(session);
+            message.setFrom(new InternetAddress(FROM_EMAIL));
+            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(TO_EMAIL));
+            message.setSubject(subject);
+            String htmlBody = "<pre>" + body.replace("\n", "<br>") + "</pre>";
+            message.setContent(htmlBody, "text/html");
+            Transport.send(message);
+            System.out.println("✅ Email notification sent successfully.");
+        } catch (MessagingException e) {
+            System.err.println("❌ Error sending email: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
